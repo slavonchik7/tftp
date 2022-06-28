@@ -64,12 +64,20 @@ struct tftp_serv_info {
 };
 
 struct saddr_proc {
-    struct sockaddr_in saddr;
-    int addr_status;
+    pthread_cond_t  __cond_proc;
+    pthread_mutex_t __mute_proc;
+
     pthread_t ptid;
+
+    struct sockaddr_in saddr;
+
+    int addr_status;
     int not_first_call;
     short current_op_code;
-    int go_proc;
+
+    volatile int go_proc;
+    volatile int client_process;
+
 };
 
 struct sc_exch_info {

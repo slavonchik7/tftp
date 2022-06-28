@@ -90,29 +90,17 @@ void *__client_proc(void *cp_data) {
 
         if (sce_info->prc_addr->not_first_call != 0) {
 
-            pthread_mutex_lock(&sce_info->__mute_proc);
+            pthread_mutex_lock(&sce_info->prc_addr->__mute_proc);
             if (sce_info->prc_addr->go_proc == UNPROC) {
 
                 printf("MUTE client with pid: %ld\n", pthread_self());
-                pthread_cond_wait(&sce_info->__cond_proc, &sce_info->__mute_proc);
+                pthread_cond_wait(&sce_info->prc_addr->__cond_proc, &sce_info->prc_addr->__mute_proc);
                 printf("UNMUTE client with pid: %ld\n", pthread_self());
 
             }
-            pthread_mutex_unlock(&sce_info->__mute_proc);
+            pthread_mutex_unlock(&sce_info->prc_addr->__mute_proc);
 
-//            pthread_mutex_lock(&sce_info->__mute_between_proc);
-            if (sce_info->prc_addr->ptid != pthread_self()) {
-                printf("CONTINUE client with pid: %ld\n", pthread_self());
-//                pthread_mutex_unlock(&sce_info->__mute_between_proc);
-                continue;
-            }
-//            pthread_mutex_unlock(&sce_info->__mute_between_proc);
-
-//            pthread_mutex_unlock(&sce_info->__mute_proc);
-
-            pthread_mutex_lock(&sce_info->__mute_main);
             sce_info->client_process = CLIENT_PROC_BUSY;
-            pthread_mutex_unlock(&sce_info->__mute_main);
         }
 
 

@@ -277,23 +277,21 @@ int tftp_serv_run(struct tftp_serv_info *serv_info, const size_t max_cnnct_numbe
     struct saddr_proc *tmp_saddr;
 
     for(int i = 0; i < max_cnnct_number; i++) {
+        pthread_cond_init(&(saddrs[i].__mute_proc), NULL);
+        pthread_mutex_init(&(saddrs[i].__mute_proc), NULL);
         saddrs[i].addr_status = ADDR_INACTIVE;
         saddrs[i].not_first_call = 0;
+        saddrs[i].go_proc = UNPROC;
+        saddrs[i].client_process = CLIENT_PROC_FREE;
     }
 
     struct sc_exch_info sc_info;
     sc_info.main_fd = serv_info->tftp_sinfo.s_fd;
     sc_info.serv_saddr = &serv_info->tftp_sinfo.s_addr;
     sc_info.tftp_dir_path = serv_info->tftp_dir;
-    sc_info.client_process = CLIENT_PROC_FREE;
+//    sc_info.client_process = CLIENT_PROC_FREE;
     sc_info.active_host_counter = 0;
 
-    pthread_cond_init(&sc_info.__cond_main, NULL);
-    pthread_cond_init(&sc_info.__cond_proc, NULL);
-    pthread_mutex_init(&sc_info.__mute_main, NULL);
-    pthread_mutex_init(&sc_info.__mute_proc, NULL);
-    pthread_mutex_init(&sc_info.__mute_active_count, NULL);
-    pthread_mutex_init(&sc_info.__mute_between_proc, NULL);
 
     fd_set serv_setfd;
     FD_ZERO(&serv_setfd);
@@ -311,16 +309,17 @@ int tftp_serv_run(struct tftp_serv_info *serv_info, const size_t max_cnnct_numbe
     printf("Waiting a packet...\n");
 
     while (select(serv_info->tftp_sinfo.s_fd + 1, &serv_setfd, NULL, NULL, NULL)) {
-        pthread_mutex_lock(&sc_info.__mute_main);
-        if (sc_info.client_process == CLIENT_PROC_BUSY) {
+
+        pthread_mutex_lock(&sc_info.prc_addr->__mute_proc);
+        if (sc_info.prc_addr->client_process == CLIENT_PROC_BUSY) {
             printf("serv in MUTE\n");
-//            pthread_mutex_unlock(&sc_info.__mute_main);
             /* ожидаю, пока потоки завершат свою работу */
-            pthread_cond_wait(&sc_info.__cond_main, &sc_info.__mute_main);
+            pthread_cond_wait(&sc_info.prc_addr->__cond_main, &sc_info.prc_addr->__mute_main);
 
             printf("serv has been UNMUTE\n");
         }
-        pthread_mutex_unlock(&sc_info.__mute_main);
+        pthread_mutex_unlock(&sc_info.__mute_proc);
+
 
         bzero(buff, BUFF_SIZE);
 
@@ -332,26 +331,26 @@ int tftp_serv_run(struct tftp_serv_info *serv_info, const size_t max_cnnct_numbe
 
         /* проверка хоста от которого были получены данные
          * и принятие решения о дальнейших действиях */
-//            pthread_mutex_lock(&sc_info.__mute_proc);
+
 
         if ((tmp_saddr = __find_saddr(saddrs, max_cnnct_number, &recv_addr.saddr)) != NULL) {
             printf("such host already have been connected\n");
-            pthread_mutex_lock(&sc_info.__mute_proc);
+            pthread_mutex_lock(&sc_info.tmp_saddr->__mute_proc);
             if (tmp_saddr->addr_status == ADDR_ACTIVE) {
                 tmp_saddr->go_proc = START_PROC;
 
-                pthread_mutex_unlock(&sc_info.__mute_proc);
+                pthread_mutex_unlock(&sc_info.tmp_saddr->__mute_proc);
 
                 /* если уже происходит передача данных или другое взаимодействие двух хостов */
                 printf("such host already activated\n");
                 /* пробуждаю потоки для обработки полученного запроса */
-                pthread_cond_broadcast(&sc_info.__cond_proc);
+                pthread_cond_broadcast(&sc_info.tmp_saddr->__cond_proc);
             } else {
                 /* если этот адрес присутствует в массиве, но сейчас никакого взаимодействия не происходит */
                 printf("such host inactivated\n");
                 /* говорю, что хост снова активен */
                 tmp_saddr->addr_status = ADDR_ACTIVE;
-                pthread_mutex_unlock(&sc_info.__mute_proc);
+                pthread_mutex_unlock(&sc_info.tmp_saddr->__mute_proc);
 
                 pthread_create(&tmp_saddr->ptid, NULL, __client_proc, &sc_info);
             }
