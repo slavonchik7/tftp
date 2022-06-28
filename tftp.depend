@@ -1,0 +1,38 @@
+# depslib dependency file v1.0
+1655889175 source:/home/christmas/Desktop/codeblocks/tftp/main.c
+	<sys/types.h>
+	<sys/socket.h>
+	<unistd.h>
+	<fcntl.h>
+	<stdlib.h>
+	<stdio.h>
+	<string.h>
+	<errno.h>
+	<arpa/inet.h>
+	"tftpbuf.h"
+
+1655989778 source:/home/christmas/Desktop/codeblocks/tftp/tftpbuf.c
+	"tftpbuf.h"
+
+1655896777 /home/christmas/Desktop/codeblocks/tftp/tftpbuf.h
+	<sys/stat.h>
+	<sys/types.h>
+	<sys/socket.h>
+	<unistd.h>
+	<fcntl.h>
+	<stdlib.h>
+	<stdio.h>
+	<string.h>
+	<errno.h>
+	<pthread.h>
+	<arpa/inet.h>
+	<dirent.h>
+	<malloc.h>
+
+1654252563 source:/home/christmas/Desktop/codeblocks/tftp/ciowrap.c
+	"ciowrap.h"
+
+1654253032 /home/christmas/Desktop/codeblocks/tftp/ciowrap.h
+	<string.h>
+	<stdio.h>
+
