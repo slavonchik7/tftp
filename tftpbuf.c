@@ -13,6 +13,7 @@ int __addr_is_active(struct saddr_proc *sproc, size_t ssize, struct sockaddr_in 
 
 void *__client_proc(void *cp_data);
 
+void *pwait_create(struct saddr_proc *wait_saddr);
 
 size_t form_rrq(void *pbuf, size_t bsize, const char *file_name, const char *trans_mode) {
     return rw_packet_form(pbuf, bsize, OP_RRQ, file_name, trans_mode);
@@ -271,26 +272,39 @@ int tftp_serv_run(struct tftp_serv_info *serv_info, const size_t max_cnnct_numbe
     if (max_cnnct_number == 0)
         return 0;
 
-    struct saddr_proc saddrs[max_cnnct_number];
-
-    struct saddr_proc recv_addr;
-    struct saddr_proc *tmp_saddr;
-
-    for(int i = 0; i < max_cnnct_number; i++) {
-        pthread_cond_init(&(saddrs[i].__mute_proc), NULL);
-        pthread_mutex_init(&(saddrs[i].__mute_proc), NULL);
-        saddrs[i].addr_status = ADDR_INACTIVE;
-        saddrs[i].not_first_call = 0;
-        saddrs[i].go_proc = UNPROC;
-        saddrs[i].client_process = CLIENT_PROC_FREE;
-    }
 
     struct sc_exch_info sc_info;
     sc_info.main_fd = serv_info->tftp_sinfo.s_fd;
     sc_info.serv_saddr = &serv_info->tftp_sinfo.s_addr;
     sc_info.tftp_dir_path = serv_info->tftp_dir;
-//    sc_info.client_process = CLIENT_PROC_FREE;
+    sc_info.client_process = CLIENT_PROC_FREE;
     sc_info.active_host_counter = 0;
+
+    pthread_cond_init(&sc_info.__cond_swait, NULL);
+    pthread_mutex_init(&sc_info.__mute_swait, NULL);
+
+    struct saddr_proc saddrs[max_cnnct_number];
+
+    struct saddr_proc recv_addr;
+    struct saddr_proc *tmp_saddr = saddrs;
+
+    for(int i = 0; i < max_cnnct_number; i++) {
+        pthread_cond_init(&(saddrs[i].__cond_proc), NULL);
+        pthread_mutex_init(&(saddrs[i].__mute_proc), NULL);
+        saddrs[i].addr_status = ADDR_INACTIVE;
+        saddrs[i].ready_status = NOT_READY;
+        saddrs[i].work_proc = PROC_END_WORK;
+        saddrs[i].first_call = 1;
+        saddrs[i].go_proc = UNPROC;
+//        saddrs[i].client_process = CLIENT_PROC_FREE;
+        saddrs[i].sc_main = &sc_info;
+
+        sc_info.prc_addr = &saddrs[i];
+
+        pthread_create(&saddrs[i].ptid, NULL, __client_proc, &saddrs[i]);
+
+        pwait_create(&saddrs[i]);
+    }
 
 
     fd_set serv_setfd;
@@ -310,21 +324,33 @@ int tftp_serv_run(struct tftp_serv_info *serv_info, const size_t max_cnnct_numbe
 
     while (select(serv_info->tftp_sinfo.s_fd + 1, &serv_setfd, NULL, NULL, NULL)) {
 
-        pthread_mutex_lock(&sc_info.prc_addr->__mute_proc);
-        if (sc_info.prc_addr->client_process == CLIENT_PROC_BUSY) {
+        pthread_mutex_lock(&sc_info.__mute_swait);
+        if (tmp_saddr->work_proc == PROC_WORK) {
             printf("serv in MUTE\n");
             /* ожидаю, пока потоки завершат свою работу */
-            pthread_cond_wait(&sc_info.prc_addr->__cond_main, &sc_info.prc_addr->__mute_main);
+            pthread_cond_wait(&sc_info.__cond_swait, &sc_info.__mute_swait);
 
             printf("serv has been UNMUTE\n");
         }
-        pthread_mutex_unlock(&sc_info.__mute_proc);
+        pthread_mutex_unlock(&sc_info.__mute_swait);
+
+
+        pthread_mutex_lock(&tmp_saddr->__mute_proc);
+//        tmp_saddr->work_proc = PROC_END_WORK;
+        if (sc_info.client_process == CLIENT_PROC_BUSY) {
+            printf("serv in MUTE\n");
+            /* ожидаю, пока потоки завершат свою работу */
+            pthread_cond_wait(&tmp_saddr->__cond_proc, &tmp_saddr->__mute_proc);
+
+            printf("serv has been UNMUTE\n");
+        }
+        pthread_mutex_unlock(&tmp_saddr->__mute_proc);
 
 
         bzero(buff, BUFF_SIZE);
 
         /* принимаю сообщения от хоста */
-        if ((sc_info.bsize = recvfrom(serv_info->tftp_sinfo.s_fd, buff, BUFF_SIZE, 0, (struct sockaddr *)&recv_addr.saddr, &sck_len)) < 0)
+        if ((sc_info.bsize = recvfrom(serv_info->tftp_sinfo.s_fd, buff, BUFF_SIZE, 0, (struct sockaddr *)&client_addr, &sck_len)) < 0)
             continue;
         printf("Geted packet\n");
 
@@ -333,45 +359,58 @@ int tftp_serv_run(struct tftp_serv_info *serv_info, const size_t max_cnnct_numbe
          * и принятие решения о дальнейших действиях */
 
 
-        if ((tmp_saddr = __find_saddr(saddrs, max_cnnct_number, &recv_addr.saddr)) != NULL) {
+        print_host(&client_addr);
+
+        if ((tmp_saddr = __find_saddr(saddrs, max_cnnct_number, &client_addr)) != NULL) {
             printf("such host already have been connected\n");
-            pthread_mutex_lock(&sc_info.tmp_saddr->__mute_proc);
+            pthread_mutex_lock(&tmp_saddr->__mute_proc);
+//            pthread_mutex_lock(&tmp_saddr->__mute_proc);
+            tmp_saddr->go_proc = START_PROC;
+            pthread_mutex_unlock(&tmp_saddr->__mute_proc);
+            pthread_cond_broadcast(&tmp_saddr->__cond_proc);
+
+
+//            pthread_mutex_unlock(&tmp_saddr->__mute_proc);
+            #if 0
+            pthread_mutex_lock(&tmp_saddr->__mute_proc);
             if (tmp_saddr->addr_status == ADDR_ACTIVE) {
                 tmp_saddr->go_proc = START_PROC;
 
-                pthread_mutex_unlock(&sc_info.tmp_saddr->__mute_proc);
+                pthread_mutex_unlock(&tmp_saddr->__mute_proc);
 
                 /* если уже происходит передача данных или другое взаимодействие двух хостов */
                 printf("such host already activated\n");
                 /* пробуждаю потоки для обработки полученного запроса */
-                pthread_cond_broadcast(&sc_info.tmp_saddr->__cond_proc);
+                pthread_cond_broadcast(&tmp_saddr->__cond_proc);
             } else {
                 /* если этот адрес присутствует в массиве, но сейчас никакого взаимодействия не происходит */
                 printf("such host inactivated\n");
                 /* говорю, что хост снова активен */
                 tmp_saddr->addr_status = ADDR_ACTIVE;
-                pthread_mutex_unlock(&sc_info.tmp_saddr->__mute_proc);
+                pthread_mutex_unlock(&tmp_saddr->__mute_proc);
 
                 pthread_create(&tmp_saddr->ptid, NULL, __client_proc, &sc_info);
             }
+            #endif // 0
+
             printf("client has been call resume\n");
-        } else if (sc_info.active_host_counter < 5) {
-            pthread_mutex_lock(&sc_info.__mute_proc);
+        } else if (sc_info.active_host_counter < max_cnnct_number) {
 
             printf("current client did not existed\n");
-            sc_info.prc_addr = __find_free(saddrs, max_cnnct_number);
-            sc_info.prc_addr->saddr = recv_addr.saddr;
-            sc_info.prc_addr->go_proc = START_PROC;
-            sc_info.prc_addr->addr_status = ADDR_ACTIVE;
+            tmp_saddr = __find_free(saddrs, max_cnnct_number);
 
-            printf("ALL OK\n");
-            pthread_create(&sc_info.prc_addr->ptid, NULL, __client_proc, &sc_info);
+            pthread_mutex_lock(&tmp_saddr->__mute_proc);
 
-            //pthread_mutex_lock(&sc_info.__mute_active_count);
+            tmp_saddr->saddr = client_addr;
+            tmp_saddr->go_proc = START_PROC;
+            tmp_saddr->addr_status = ADDR_ACTIVE;
+
             sc_info.active_host_counter++;
-            pthread_mutex_unlock(&sc_info.__mute_proc);
 
-            //pthread_mutex_unlock(&sc_info.__mute_active_count);
+            pthread_mutex_unlock(&tmp_saddr->__mute_proc);
+
+            pthread_cond_broadcast(&tmp_saddr->__cond_proc);
+
 
         } else {
             /* если с такого хоста раннее ничего не приходило и мест больше нет
@@ -392,8 +431,6 @@ struct saddr_proc *__find_saddr(struct saddr_proc *sproc, size_t ssize, struct s
         return NULL;
 
     for (size_t i = 0; i < ssize; i++) {
-        print_host(taddr);
-        print_host(&sproc->saddr);
 
         if (memcmp(taddr, &(sproc[i]).saddr, sizeof(struct sockaddr_in)) == 0) {
             return &(sproc[i]);
@@ -420,6 +457,8 @@ int __addr_is_active(struct saddr_proc *sproc, size_t ssize, struct sockaddr_in 
     if (sproc == NULL || taddr == NULL)
         return -1;
 
+    printf("sgvwreognreiogjregr\n");
+
     for (size_t i = 0; i < ssize; i++) {
         if (memcmp(taddr, &(sproc[i]).saddr, sizeof(struct sockaddr_in)) == 0) {
             if (sproc[i].addr_status == ADDR_ACTIVE)
@@ -431,6 +470,23 @@ int __addr_is_active(struct saddr_proc *sproc, size_t ssize, struct sockaddr_in 
 
     return -1;
 }
+
+
+void *pwait_create(struct saddr_proc *wait_saddr) {
+    if (wait_saddr == NULL)
+        return NULL;
+
+    pthread_mutex_lock(&wait_saddr->__mute_proc);
+    if (wait_saddr->ready_status == NOT_READY) {
+        pthread_cond_wait(&wait_saddr->__cond_proc, &wait_saddr->__mute_proc);
+    }
+    pthread_mutex_unlock(&wait_saddr->__mute_proc);
+
+    return wait_saddr;
+}
+
+
+
 
 
 

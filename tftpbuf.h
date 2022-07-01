@@ -43,6 +43,12 @@
 #define START_PROC 31
 #define UNPROC 32
 
+#define READY       41
+#define NOT_READY   42
+
+#define PROC_WORK   51
+#define PROC_END_WORK   52
+
 
 #define close_return(fd, val) \
             close(fd); \
@@ -69,25 +75,24 @@ struct saddr_proc {
 
     pthread_t ptid;
 
+    volatile int ready_status;
+
     struct sockaddr_in saddr;
 
     int addr_status;
-    int not_first_call;
+    int first_call;
     short current_op_code;
 
     volatile int go_proc;
-    volatile int client_process;
 
+    volatile int work_proc;
+
+    struct sc_exch_info *sc_main;
 };
 
 struct sc_exch_info {
-    pthread_cond_t  __cond_main;
-    pthread_cond_t  __cond_proc;
-    pthread_mutex_t __mute_proc;
-    pthread_mutex_t __mute_main;
-    pthread_mutex_t __mute_active_count;
-    pthread_mutex_t __mute_between_proc;
-
+    pthread_cond_t  __cond_swait;
+    pthread_mutex_t __mute_swait;
 
     int active_host_counter;
 
@@ -95,10 +100,11 @@ struct sc_exch_info {
 
     volatile int client_process;
 
-    struct sockaddr_in *serv_saddr;
     int main_fd;
 
     struct saddr_proc *prc_addr;
+
+    struct sockaddr_in *serv_saddr;
 
     char *buff;
     volatile ssize_t bsize;
