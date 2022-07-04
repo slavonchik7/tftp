@@ -366,8 +366,8 @@ int tftp_serv_run(struct tftp_serv_info *serv_info, const size_t max_cnnct_numbe
         if ((tmp_saddr = __find_saddr(saddrs, max_cnnct_number, &client_addr)) != NULL) {
             printf("such host already have been connected\n");
             pthread_mutex_lock(&tmp_saddr->__mute_proc);
-//            pthread_mutex_lock(&tmp_saddr->__mute_proc);
             tmp_saddr->go_proc = START_PROC;
+            printf("host have a first call: %d\n", tmp_saddr->first_call);
             pthread_mutex_unlock(&tmp_saddr->__mute_proc);
             pthread_cond_broadcast(&tmp_saddr->__cond_proc);
 

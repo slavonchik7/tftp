@@ -64,7 +64,6 @@ void *__client_proc(void *cp_data) {
 
         pthread_mutex_lock(&psaddr_prc->__mute_swait);
         psaddr_prc->work_proc = PROC_END_WORK;
-        sce_info->client_process = CLIENT_PROC_FREE;
         pthread_mutex_unlock(&psaddr_prc->__mute_swait);
 
         pthread_cond_broadcast(&psaddr_prc->__cond_swait);
@@ -143,8 +142,6 @@ void *__client_proc(void *cp_data) {
 
         /* если в данный момент выполняется запись файла */
         } else if (mop_code == OP_WRQ) {
-            #if 1
-//            if (sce_info->prc_addr->not_first_call == 1) {
             /* записываем полученные данные */
             if (!psaddr_prc->first_call) {
                 if ((byte_size = write(f_fd, mbuff + 4, sce_info->bsize - 4)) < 0) {
@@ -164,16 +161,6 @@ void *__client_proc(void *cp_data) {
             else {
                 ((short *)mbuff)[1] = htons(0);
             }
-//            } else {
-//                printf("\n---------PACKET--------\n");
-//                if (((short *)mbuff)[0] == htons(OP_WRQ)) {
-//                    printf("WRQ");
-//                }
-//                write(fileno(stdout), mbuff, sce_info->bsize);
-//                printf("\n---------PACKET--------\n");
-//            }
-            #endif // 0
-
 
             /* формируем ACK пакет и отправляем ответ на принятые даннные */
             ((short *)mbuff)[0] = htons(OP_ACK);
@@ -196,22 +183,37 @@ void *__client_proc(void *cp_data) {
 
                 psaddr_prc->addr_status = ADDR_INACTIVE;
                 psaddr_prc->first_call = 1;
+                psaddr_prc->go_proc = UNPROC;
                 close(f_fd);
+                printf("CLOSE file client with pid: %ld\n", pthread_self());
                 sce_info->active_host_counter--;
 
                 pthread_mutex_unlock(&psaddr_prc->__mute_proc);
+//
+//                pthread_mutex_lock(&psaddr_prc->__mute_swait);
+//                psaddr_prc->work_proc = PROC_END_WORK;
+//                sce_info->client_process = CLIENT_PROC_FREE;
+//                pthread_mutex_unlock(&psaddr_prc->__mute_swait);
+
+//                pthread_cond_broadcast(&psaddr_prc->__cond_swait);
+
+
+                pthread_cond_broadcast(&psaddr_prc->__cond_proc);
+
+//                return NULL;
             }
-        } else
+        } else {
+            printf("I want go first with pid: %ld\n", pthread_self());
             psaddr_prc->first_call = 0;
+        }
 
 //        pselect(0, NULL, NULL, NULL, &tmspec, NULL);
 
 
 
-        printf("call server for resume\n");
+        printf("call server for resume  with pid: %ld\n", pthread_self());
 
-
-        #if 0
+        #if 1
         pthread_mutex_lock(&psaddr_prc->__mute_proc);
         sce_info->client_process = CLIENT_PROC_FREE;
         pthread_mutex_unlock(&psaddr_prc->__mute_proc);
@@ -248,16 +250,18 @@ int __check_open(struct saddr_proc *chf_saddr) {
         return -1;
 
     struct sc_exch_info *sce_info = chf_saddr->sc_main;
+    char *fpbuff = sce_info->buff;
+
 
     int f_fd = -1;
-    size_t fpath_len = strlen(sce_info->tftp_dir_path) + strlen(sce_info->buff + 2);
+    size_t fpath_len = strlen(sce_info->tftp_dir_path) + strlen(fpbuff + 2);
     char fpath[fpath_len + 1];
 
-    snprintf(fpath, fpath_len + 1, "%s%s", sce_info->tftp_dir_path, sce_info->buff + 2);
+    snprintf(fpath, fpath_len + 1, "%s%s", sce_info->tftp_dir_path, fpbuff + 2);
 
 
     short op_code = chf_saddr->current_op_code;
-    printf("---------OP_CODE: %hu ------\n", op_code);
+    printf("---------FILE NAME: %s + %s ------\n", sce_info->tftp_dir_path, fpbuff + 2);
     /* открытие файла в зависимости от требуемого запроса */
     if (op_code == OP_WRQ) {
         printf("today write\n");
@@ -265,6 +269,8 @@ int __check_open(struct saddr_proc *chf_saddr) {
     } else if (op_code == OP_RRQ) {
         printf("today read\n");
         f_fd = open(fpath, O_RDONLY);
+    } else {
+        printf("Getted full shit op_code: %hu \n", op_code);
     }
 
 
