@@ -62,12 +62,12 @@ void *__client_proc(void *cp_data) {
 //        printf("ALL OK client with pid: %ld\n", pthread_self());
 
 
-        pthread_mutex_lock(&sce_info->__mute_swait);
+        pthread_mutex_lock(&psaddr_prc->__mute_swait);
         psaddr_prc->work_proc = PROC_END_WORK;
         sce_info->client_process = CLIENT_PROC_FREE;
-        pthread_mutex_unlock(&sce_info->__mute_swait);
+        pthread_mutex_unlock(&psaddr_prc->__mute_swait);
 
-        pthread_cond_broadcast(&sce_info->__cond_swait);
+        pthread_cond_broadcast(&psaddr_prc->__cond_swait);
 
 
         pthread_mutex_lock(&psaddr_prc->__mute_proc);
@@ -115,27 +115,6 @@ void *__client_proc(void *cp_data) {
 
             printf("open file successfull client with pid: %ld\n", pthread_self());
 
-//            psaddr_prc->first_call = 0;
-//
-//            if (mop_code == OP_WRQ) {
-//                ((short *)mbuff)[0] = htons(OP_ACK);
-//                ((short *)mbuff)[1] = htons(0);
-//                if (sendto(sce_info->main_fd, mbuff, 4, 0, (struct sockaddr *)psock_addr, salen) > 0)
-//                    printf("send answer on WRQ client with pid: %ld\n", pthread_self());
-//                else
-//                    printf("NOT send answer on WRQ client with pid: %ld\n", pthread_self());
-////
-////                pthread_mutex_lock(&psaddr_prc->__mute_proc);
-////                sce_info->client_process = CLIENT_PROC_FREE;
-////                pthread_mutex_unlock(&psaddr_prc->__mute_proc);
-////
-////                psaddr_prc->go_proc = UNPROC;
-////
-////                printf("call server for resume\n");
-////                pthread_cond_broadcast(&psaddr_prc->__cond_proc);
-//
-////                continue;
-//            }
         }
 
 
@@ -232,9 +211,11 @@ void *__client_proc(void *cp_data) {
         printf("call server for resume\n");
 
 
-//        pthread_mutex_lock(&psaddr_prc->__mute_proc);
-//        sce_info->client_process = CLIENT_PROC_FREE;
-//        pthread_mutex_unlock(&psaddr_prc->__mute_proc);
+        #if 0
+        pthread_mutex_lock(&psaddr_prc->__mute_proc);
+        sce_info->client_process = CLIENT_PROC_FREE;
+        pthread_mutex_unlock(&psaddr_prc->__mute_proc);
+        #endif // 0
 
         psaddr_prc->go_proc = UNPROC;
 
@@ -276,7 +257,7 @@ int __check_open(struct saddr_proc *chf_saddr) {
 
 
     short op_code = chf_saddr->current_op_code;
-
+    printf("---------OP_CODE: %hu ------\n", op_code);
     /* открытие файла в зависимости от требуемого запроса */
     if (op_code == OP_WRQ) {
         printf("today write\n");

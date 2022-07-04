@@ -75,6 +75,9 @@ struct saddr_proc {
 
     pthread_t ptid;
 
+    pthread_cond_t  __cond_swait;
+    pthread_mutex_t __mute_swait;
+
     volatile int ready_status;
 
     struct sockaddr_in saddr;
@@ -91,8 +94,6 @@ struct saddr_proc {
 };
 
 struct sc_exch_info {
-    pthread_cond_t  __cond_swait;
-    pthread_mutex_t __mute_swait;
 
     int active_host_counter;
 

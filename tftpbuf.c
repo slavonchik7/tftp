@@ -280,8 +280,6 @@ int tftp_serv_run(struct tftp_serv_info *serv_info, const size_t max_cnnct_numbe
     sc_info.client_process = CLIENT_PROC_FREE;
     sc_info.active_host_counter = 0;
 
-    pthread_cond_init(&sc_info.__cond_swait, NULL);
-    pthread_mutex_init(&sc_info.__mute_swait, NULL);
 
     struct saddr_proc saddrs[max_cnnct_number];
 
@@ -291,6 +289,10 @@ int tftp_serv_run(struct tftp_serv_info *serv_info, const size_t max_cnnct_numbe
     for(int i = 0; i < max_cnnct_number; i++) {
         pthread_cond_init(&(saddrs[i].__cond_proc), NULL);
         pthread_mutex_init(&(saddrs[i].__mute_proc), NULL);
+
+        pthread_cond_init(&(saddrs[i].__cond_swait), NULL);
+        pthread_mutex_init(&(saddrs[i].__mute_swait), NULL);
+
         saddrs[i].addr_status = ADDR_INACTIVE;
         saddrs[i].ready_status = NOT_READY;
         saddrs[i].work_proc = PROC_END_WORK;
@@ -324,15 +326,15 @@ int tftp_serv_run(struct tftp_serv_info *serv_info, const size_t max_cnnct_numbe
 
     while (select(serv_info->tftp_sinfo.s_fd + 1, &serv_setfd, NULL, NULL, NULL)) {
 
-        pthread_mutex_lock(&sc_info.__mute_swait);
+        pthread_mutex_lock(&tmp_saddr->__mute_swait);
         if (tmp_saddr->work_proc == PROC_WORK) {
             printf("serv in MUTE\n");
             /* ожидаю, пока потоки завершат свою работу */
-            pthread_cond_wait(&sc_info.__cond_swait, &sc_info.__mute_swait);
+            pthread_cond_wait(&tmp_saddr->__cond_swait, &tmp_saddr->__mute_swait);
 
             printf("serv has been UNMUTE\n");
         }
-        pthread_mutex_unlock(&sc_info.__mute_swait);
+        pthread_mutex_unlock(&tmp_saddr->__mute_swait);
 
 
         pthread_mutex_lock(&tmp_saddr->__mute_proc);
