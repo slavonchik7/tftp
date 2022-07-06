@@ -17,6 +17,8 @@
 #include <arpa/inet.h>
 #include <dirent.h>
 #include <malloc.h>
+#include <signal.h>
+
 
 /* TFTP op-codes */
 #define OP_RRQ		1
@@ -24,6 +26,12 @@
 #define OP_DATA		3
 #define OP_ACK		4
 #define	OP_ERROR	5
+
+#define N_OP_RRQ    htons(OP_RRQ)
+#define N_OP_WRQ    htons(OP_WRQ)
+#define N_OP_DATA   htons(OP_DATA)
+#define N_OP_ACK    htons(OP_ACK)
+#define N_OP_ERROR  htons(OP_ERROR)
 
 #define MODE_ASC "netascii"
 #define MODE_OCT "octet"
@@ -75,20 +83,14 @@ struct saddr_proc {
 
     pthread_t ptid;
 
-    pthread_cond_t  __cond_swait;
-    pthread_mutex_t __mute_swait;
-
     volatile int ready_status;
 
     struct sockaddr_in saddr;
 
-    int addr_status;
     int first_call;
     short current_op_code;
 
     volatile int go_proc;
-
-    volatile int work_proc;
 
     struct sc_exch_info *sc_main;
 };
@@ -97,13 +99,11 @@ struct sc_exch_info {
 
     int active_host_counter;
 
-    char *tftp_dir_path;
-
     volatile int client_process;
 
-    int main_fd;
+    volatile int exit_flag;
 
-    struct saddr_proc *prc_addr;
+    struct tftp_serv_info *srv_info;
 
     struct sockaddr_in *serv_saddr;
 
@@ -138,6 +138,8 @@ int tftp_serv_run(struct tftp_serv_info *serv_info, const size_t max_cnnct_numbe
 
 int tftp_serv_wr_to_client(struct tftp_serv_info *serv_info, struct sockaddr_in *client_addrin);
 int tftp_serv_rd_from_client(struct tftp_serv_info *serv_info, struct sockaddr_in *client_addrin);
+
+
 
 
 #endif // TFTPBUF_H
