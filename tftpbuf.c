@@ -3,16 +3,22 @@
 
 
 
+static volatile int sig_exit_flag = 0;
 
-#define BOFFSET 4
+static int serv_break(struct saddr_proc *saddrs, ssize_t ssize);
 
+extern int __form_error(void *pbuf, size_t bsize, short err_code, const char *msg);
 
-struct saddr_proc *__find_saddr(struct saddr_proc *sproc, size_t ssize, struct sockaddr_in *taddr);
-struct saddr_proc *__find_free(struct saddr_proc *sproc, size_t ssize);
+struct saddr_proc *__find_saddr(struct saddr_proc *sproc, ssize_t ssize, struct sockaddr_in *taddr);
+struct saddr_proc *__find_free(struct saddr_proc *sproc, ssize_t ssize);
 int __addr_is_active(struct saddr_proc *sproc, size_t ssize, struct sockaddr_in *taddr);
+
+
+void exit_sighandler(int signum, siginfo_t *si, void *v);
 
 void *__client_proc(void *cp_data);
 
+void *pwait_create(struct saddr_proc *wait_saddr);
 
 size_t form_rrq(void *pbuf, size_t bsize, const char *file_name, const char *trans_mode) {
     return rw_packet_form(pbuf, bsize, OP_RRQ, file_name, trans_mode);
@@ -271,148 +277,206 @@ int tftp_serv_run(struct tftp_serv_info *serv_info, const size_t max_cnnct_numbe
     if (max_cnnct_number == 0)
         return 0;
 
-    struct saddr_proc saddrs[max_cnnct_number];
-
-    struct saddr_proc recv_addr;
-    struct saddr_proc *tmp_saddr;
-
-    for(int i = 0; i < max_cnnct_number; i++) {
-        saddrs[i].addr_status = ADDR_INACTIVE;
-        saddrs[i].not_first_call = 0;
-    }
 
     struct sc_exch_info sc_info;
-    sc_info.main_fd = serv_info->tftp_sinfo.s_fd;
-    sc_info.serv_saddr = &serv_info->tftp_sinfo.s_addr;
-    sc_info.tftp_dir_path = serv_info->tftp_dir;
+    sc_info.exit_flag = 0;
+    sc_info.srv_info = serv_info;
     sc_info.client_process = CLIENT_PROC_FREE;
     sc_info.active_host_counter = 0;
 
-    pthread_cond_init(&sc_info.__cond_main, NULL);
-    pthread_cond_init(&sc_info.__cond_proc, NULL);
-    pthread_mutex_init(&sc_info.__mute_main, NULL);
-    pthread_mutex_init(&sc_info.__mute_proc, NULL);
-    pthread_mutex_init(&sc_info.__mute_active_count, NULL);
-    pthread_mutex_init(&sc_info.__mute_between_proc, NULL);
+    printf("mcount:%zu\n", max_cnnct_number);
+
+    struct saddr_proc saddrs[max_cnnct_number];
+
+    struct saddr_proc *prev_saddr;
+    struct saddr_proc *tmp_saddr = saddrs;
+
+
+
+    for(size_t i = 0; i < max_cnnct_number; i++) {
+        pthread_cond_init(&(saddrs[i].__cond_proc), NULL);
+        pthread_mutex_init(&(saddrs[i].__mute_proc), NULL);
+
+        saddrs[i].ready_status = NOT_READY;
+        saddrs[i].first_call = 1;
+        saddrs[i].go_proc = UNPROC;
+
+        saddrs[i].sc_main = &sc_info;
+
+        pthread_create(&saddrs[i].ptid, NULL, __client_proc, &saddrs[i]);
+
+        pwait_create(&saddrs[i]);
+    }
+
+
+    int serv_fd = serv_info->tftp_sinfo.s_fd;
 
     fd_set serv_setfd;
     FD_ZERO(&serv_setfd);
-    FD_SET(serv_info->tftp_sinfo.s_fd, &serv_setfd);
+    FD_SET(serv_fd, &serv_setfd);
 
-    ssize_t byte_size;
 
 
     char buff[BUFF_SIZE];
     sc_info.buff = buff;
 
-    struct sockaddr_in client_addr;
-    socklen_t sck_len = sizeof(struct sockaddr_in);
 
-    printf("Waiting a packet...\n");
 
-    while (select(serv_info->tftp_sinfo.s_fd + 1, &serv_setfd, NULL, NULL, NULL)) {
-        pthread_mutex_lock(&sc_info.__mute_main);
+    sigset_t sa_mask;
+
+    sigemptyset(&sa_mask);
+    sigaddset(&sa_mask, SIGINT);
+    pthread_sigmask(SIG_BLOCK, &sa_mask, NULL);
+
+
+    struct sigaction sa;
+    bzero(&sa, sizeof(sa));
+    sa.sa_flags = SA_SIGINFO;
+    sa.sa_sigaction = exit_sighandler;
+    sigemptyset(&sa.sa_mask);
+
+    sigaction(SIGINT, &sa, NULL);
+
+
+    sigset_t empty_mask;
+    sigemptyset(&empty_mask);
+
+
+//    struct sockaddr_in client_addr;
+//    socklen_t sck_len = sizeof(struct sockaddr_in);
+//    socklen_t *ptr_sck_len = &sck_len;
+//
+//    struct sockaddr_in *ptr_client_addr = &client_addr;
+
+    while (pselect(serv_fd + 1, &serv_setfd, NULL, NULL, NULL, &empty_mask)) {
+
+
+        pthread_mutex_lock(&tmp_saddr->__mute_proc);
         if (sc_info.client_process == CLIENT_PROC_BUSY) {
+                            #ifdef DEBUG
             printf("serv in MUTE\n");
-//            pthread_mutex_unlock(&sc_info.__mute_main);
+                    #endif // DEBUG
             /* ожидаю, пока потоки завершат свою работу */
-            pthread_cond_wait(&sc_info.__cond_main, &sc_info.__mute_main);
-
+            pthread_cond_wait(&tmp_saddr->__cond_proc, &tmp_saddr->__mute_proc);
+                    #ifdef DEBUG
             printf("serv has been UNMUTE\n");
+                    #endif // DEBUG
         }
-        pthread_mutex_unlock(&sc_info.__mute_main);
+        pthread_mutex_unlock(&tmp_saddr->__mute_proc);
 
-        bzero(buff, BUFF_SIZE);
 
+        if(sig_exit_flag) {
+            serv_break(saddrs, max_cnnct_number);
+            return 1;
+        }
+
+
+        struct sockaddr_in client_addr;
+        struct sockaddr_in *ptr_client_addr = &client_addr;
+
+        socklen_t sck_len = sizeof(struct sockaddr_in);
+        socklen_t *ptr_sck_len = &sck_len;
+
+
+
+//        bzero(buff, BUFF_SIZE);
+
+        prev_saddr = tmp_saddr;
         /* принимаю сообщения от хоста */
-        if ((sc_info.bsize = recvfrom(serv_info->tftp_sinfo.s_fd, buff, BUFF_SIZE, 0, (struct sockaddr *)&recv_addr.saddr, &sck_len)) < 0)
+        if ((sc_info.bsize = recvfrom(serv_fd, buff, BUFF_SIZE, 0, (struct sockaddr *)ptr_client_addr, ptr_sck_len)) <= 0)
             continue;
+                                #ifdef DEBUG
         printf("Geted packet\n");
+                    #endif // DEBUG
 
 
         /* проверка хоста от которого были получены данные
          * и принятие решения о дальнейших действиях */
-//            pthread_mutex_lock(&sc_info.__mute_proc);
 
-        if ((tmp_saddr = __find_saddr(saddrs, max_cnnct_number, &recv_addr.saddr)) != NULL) {
+                    #ifdef DEBUG
+        print_host(&client_addr);
+                    #endif // DEBUG
+
+        if ((tmp_saddr = __find_saddr(saddrs, max_cnnct_number, ptr_client_addr)) != NULL) {
+                            #ifdef DEBUG
             printf("such host already have been connected\n");
-            pthread_mutex_lock(&sc_info.__mute_proc);
-            if (tmp_saddr->addr_status == ADDR_ACTIVE) {
-                tmp_saddr->go_proc = START_PROC;
+                    #endif // DEBUG
 
-                pthread_mutex_unlock(&sc_info.__mute_proc);
+//            pthread_mutex_lock(&tmp_saddr->__mute_proc);
+            tmp_saddr->go_proc = START_PROC;
+            sc_info.client_process = CLIENT_PROC_BUSY;
+                                #ifdef DEBUG
+            printf("host have a first call: %d\n", tmp_saddr->first_call);
+                    #endif // DEBUG
+//            pthread_mutex_unlock(&tmp_saddr->__mute_proc);
+            pthread_cond_broadcast(&tmp_saddr->__cond_proc);
 
-                /* если уже происходит передача данных или другое взаимодействие двух хостов */
-                printf("such host already activated\n");
-                /* пробуждаю потоки для обработки полученного запроса */
-                pthread_cond_broadcast(&sc_info.__cond_proc);
-            } else {
-                /* если этот адрес присутствует в массиве, но сейчас никакого взаимодействия не происходит */
-                printf("such host inactivated\n");
-                /* говорю, что хост снова активен */
-                tmp_saddr->addr_status = ADDR_ACTIVE;
-                pthread_mutex_unlock(&sc_info.__mute_proc);
-
-                pthread_create(&tmp_saddr->ptid, NULL, __client_proc, &sc_info);
-            }
+                                #ifdef DEBUG
             printf("client has been call resume\n");
-        } else if (sc_info.active_host_counter < 5) {
-            pthread_mutex_lock(&sc_info.__mute_proc);
-
+                    #endif // DEBUG
+        } else if (sc_info.active_host_counter < max_cnnct_number) {
+                    #ifdef DEBUG
             printf("current client did not existed\n");
-            sc_info.prc_addr = __find_free(saddrs, max_cnnct_number);
-            sc_info.prc_addr->saddr = recv_addr.saddr;
-            sc_info.prc_addr->go_proc = START_PROC;
-            sc_info.prc_addr->addr_status = ADDR_ACTIVE;
+                    #endif // DEBUG
+            tmp_saddr = __find_free(saddrs, max_cnnct_number);
+                    #ifdef DEBUG
+            printf("host have a first call: %d\n", tmp_saddr->first_call);
+                    #endif // DEBUG
+//            pthread_mutex_lock(&tmp_saddr->__mute_proc);
+            sc_info.client_process = CLIENT_PROC_BUSY;
 
-            printf("ALL OK\n");
-            pthread_create(&sc_info.prc_addr->ptid, NULL, __client_proc, &sc_info);
+            tmp_saddr->saddr = client_addr;
+            tmp_saddr->go_proc = START_PROC;
 
-            //pthread_mutex_lock(&sc_info.__mute_active_count);
             sc_info.active_host_counter++;
-            pthread_mutex_unlock(&sc_info.__mute_proc);
 
-            //pthread_mutex_unlock(&sc_info.__mute_active_count);
+//            pthread_mutex_unlock(&tmp_saddr->__mute_proc);
+
+            pthread_cond_broadcast(&tmp_saddr->__cond_proc);
 
         } else {
+            tmp_saddr = prev_saddr;
             /* если с такого хоста раннее ничего не приходило и мест больше нет
              * ничего не делаем */
+            __form_error(buff, BUFF_SIZE, 0, "Exceeded the maximum number of server clients");
+            sendto(serv_fd, buff, BUFF_SIZE, 0, (struct sockaddr *)ptr_client_addr, sck_len);
+                                 # ifdef DEBUG
              fprintf(stderr, "---do not have a free client space---");
+                    #endif // DEBUG
         }
-// pthread_mutex_unlock(&sc_info.__mute_proc);
+
+                    #ifdef DEBUG
         printf("Waiting a packet...\n");
-//        sleep(2);
+                    #endif // DEBUG
+
     }
 
     return 0;
 }
 
 
-struct saddr_proc *__find_saddr(struct saddr_proc *sproc, size_t ssize, struct sockaddr_in *taddr) {
+struct saddr_proc *__find_saddr(struct saddr_proc *sproc, ssize_t ssize, struct sockaddr_in *taddr) {
     if (sproc == NULL || taddr == NULL)
         return NULL;
 
-    for (size_t i = 0; i < ssize; i++) {
-        print_host(taddr);
-        print_host(&sproc->saddr);
+    static size_t salen = sizeof(struct sockaddr_in);
 
-        if (memcmp(taddr, &(sproc[i]).saddr, sizeof(struct sockaddr_in)) == 0) {
-            return &(sproc[i]);
-        }
-    }
+    while(--ssize >= 0)
+        if (!memcmp(taddr, &((sproc[ssize]).saddr), salen))
+            return &(sproc[ssize]);
 
     return NULL;
 }
 
 
-struct saddr_proc *__find_free(struct saddr_proc *sproc, size_t ssize) {
+struct saddr_proc *__find_free(struct saddr_proc *sproc, ssize_t ssize) {
     if (sproc == NULL)
         return NULL;
 
-    for (size_t i = 0; i < ssize; i++) {
-        if (sproc[i].addr_status == ADDR_INACTIVE)
-            return &sproc[i];
-    }
+
+    while(--ssize >= 0)
+        if (sproc[ssize].first_call)
+            return &(sproc[ssize]);
 
     return NULL;
 }
@@ -422,8 +486,8 @@ int __addr_is_active(struct saddr_proc *sproc, size_t ssize, struct sockaddr_in 
         return -1;
 
     for (size_t i = 0; i < ssize; i++) {
-        if (memcmp(taddr, &(sproc[i]).saddr, sizeof(struct sockaddr_in)) == 0) {
-            if (sproc[i].addr_status == ADDR_ACTIVE)
+        if (memcmp(taddr, &((sproc[i]).saddr), sizeof(struct sockaddr_in)) == 0) {
+            if (sproc[i].first_call == 1)
                 return 0;
             else
                 return -1;
@@ -432,6 +496,55 @@ int __addr_is_active(struct saddr_proc *sproc, size_t ssize, struct sockaddr_in 
 
     return -1;
 }
+
+
+int serv_break(struct saddr_proc *saddrs, ssize_t ssize) {
+    if (saddrs == NULL)
+        return -1;
+
+    struct sc_exch_info *sc_info = saddrs->sc_main;
+    sc_info->exit_flag = 1;
+
+    /* completing and closing all client threads */
+    while(--ssize >= 0) {
+        pthread_cond_broadcast(&(saddrs[ssize].__cond_proc));
+        pthread_join(saddrs[ssize].ptid, NULL);
+
+        pthread_mutex_destroy(&(saddrs[ssize].__mute_proc));
+        pthread_cond_destroy(&(saddrs[ssize].__cond_proc));
+    }
+
+    /* clearing the memory allocated for storing the server pathс*/
+    free(sc_info->srv_info->tftp_dir);
+
+    /* closing the main socket of the server */
+    close(sc_info->srv_info->tftp_sinfo.s_fd);
+
+
+
+    return 0;
+}
+
+
+void *pwait_create(struct saddr_proc *wait_saddr) {
+    if (wait_saddr == NULL)
+        return NULL;
+
+    pthread_mutex_lock(&wait_saddr->__mute_proc);
+    if (wait_saddr->ready_status == NOT_READY) {
+        pthread_cond_wait(&wait_saddr->__cond_proc, &wait_saddr->__mute_proc);
+    }
+    pthread_mutex_unlock(&wait_saddr->__mute_proc);
+
+    return wait_saddr;
+}
+
+void exit_sighandler(int signum, siginfo_t *si, void *v) {
+    sig_exit_flag = 1;
+}
+
+
+
 
 
 

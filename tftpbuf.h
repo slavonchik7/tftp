@@ -17,6 +17,8 @@
 #include <arpa/inet.h>
 #include <dirent.h>
 #include <malloc.h>
+#include <signal.h>
+
 
 /* TFTP op-codes */
 #define OP_RRQ		1
@@ -24,6 +26,12 @@
 #define OP_DATA		3
 #define OP_ACK		4
 #define	OP_ERROR	5
+
+#define N_OP_RRQ    htons(OP_RRQ)
+#define N_OP_WRQ    htons(OP_WRQ)
+#define N_OP_DATA   htons(OP_DATA)
+#define N_OP_ACK    htons(OP_ACK)
+#define N_OP_ERROR  htons(OP_ERROR)
 
 #define MODE_ASC "netascii"
 #define MODE_OCT "octet"
@@ -42,6 +50,12 @@
 
 #define START_PROC 31
 #define UNPROC 32
+
+#define READY       41
+#define NOT_READY   42
+
+#define PROC_WORK   51
+#define PROC_END_WORK   52
 
 
 #define close_return(fd, val) \
@@ -64,33 +78,34 @@ struct tftp_serv_info {
 };
 
 struct saddr_proc {
-    struct sockaddr_in saddr;
-    int addr_status;
+    pthread_cond_t  __cond_proc;
+    pthread_mutex_t __mute_proc;
+
     pthread_t ptid;
-    int not_first_call;
+
+    volatile int ready_status;
+
+    struct sockaddr_in saddr;
+
+    int first_call;
     short current_op_code;
-    int go_proc;
+
+    volatile int go_proc;
+
+    struct sc_exch_info *sc_main;
 };
 
 struct sc_exch_info {
-    pthread_cond_t  __cond_main;
-    pthread_cond_t  __cond_proc;
-    pthread_mutex_t __mute_proc;
-    pthread_mutex_t __mute_main;
-    pthread_mutex_t __mute_active_count;
-    pthread_mutex_t __mute_between_proc;
-
 
     int active_host_counter;
 
-    char *tftp_dir_path;
-
     volatile int client_process;
 
-    struct sockaddr_in *serv_saddr;
-    int main_fd;
+    volatile int exit_flag;
 
-    struct saddr_proc *prc_addr;
+    struct tftp_serv_info *srv_info;
+
+    struct sockaddr_in *serv_saddr;
 
     char *buff;
     volatile ssize_t bsize;
@@ -123,6 +138,8 @@ int tftp_serv_run(struct tftp_serv_info *serv_info, const size_t max_cnnct_numbe
 
 int tftp_serv_wr_to_client(struct tftp_serv_info *serv_info, struct sockaddr_in *client_addrin);
 int tftp_serv_rd_from_client(struct tftp_serv_info *serv_info, struct sockaddr_in *client_addrin);
+
+
 
 
 #endif // TFTPBUF_H
